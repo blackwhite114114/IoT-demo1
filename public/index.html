@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IoT 实时温湿度监控</title>
+  <!-- Socket.IO 客户端由服务端自动提供 -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- ECharts 图表库（CDN）；课堂网络不通时可下载到 public/vendor/ 并改为本地引用 -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+      padding: 24px 16px;
+    }
+    header {
+      width: 100%; max-width: 960px;
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 24px;
+    }
+    header h1 { font-size: 20px; font-weight: 600; }
+    .topic-badge {
+      font-size: 12px; color: #94a3b8;
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 999px; padding: 4px 12px;
+    }
+    #status-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #64748b; transition: background 0.3s;
+    }
+    #status-dot.online { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+    #status-text { font-size: 13px; color: #94a3b8; }
+    .cards {
+      width: 100%; max-width: 960px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+      padding: 20px 24px;
+    }
+    .card .label { font-size: 13px; color: #94a3b8; margin-bottom: 8px; }
+    .card .value { font-size: 40px; font-weight: 700; line-height: 1.1; }
+    .card .value small { font-size: 16px; font-weight: 400; color: #94a3b8; margin-left: 4px; }
+    .card.temp .value { color: #f97316; }
+    .card.hum .value { color: #38bdf8; }
+    .card .time { font-size: 12px; color: #64748b; margin-top: 8px; }
+    #chart {
+      width: 100%; max-width: 960px; height: 420px;
+      background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>IoT 实时温湿度监控</h1>
+    <span class="topic-badge" id="topic">--</span>
+    <span id="status-dot"></span>
+    <span id="status-text">连接中…</span>
+  </header>
+
+  <div class="cards">
+    <div class="card temp">
+      <div class="label">温度</div>
+      <div class="value"><span id="temp-value">--</span><small>℃</small></div>
+      <div class="time">最后更新：<span id="temp-time">--</span></div>
+    </div>
+    <div class="card hum">
+      <div class="label">湿度</div>
+      <div class="value"><span id="hum-value">--</span><small>%RH</small></div>
+      <div class="time">最后更新：<span id="hum-time">--</span></div>
+    </div>
+  </div>
+
+  <div id="chart"></div>
+
+  <script>
+    // 从地址栏读取主题参数 ?topic=iot/demo/temperature，默认与 .env 一致
+    const params = new URLSearchParams(location.search);
+    document.getElementById('topic').textContent = params.get('topic') || 'iot/demo/temperature';
+
+    // ---------- ECharts 初始化 ----------
+    const MAX_POINTS = 50; // 滑动窗口：最多保留 50 个点
+    const times = [], temps = [], hums = [];
+    const chart = echarts.init(document.getElementById('chart'));
+    const option = {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['温度 (℃)', '湿度 (%RH)'], textStyle: { color: '#94a3b8' }, top: 10 },
+      grid: { left: 50, right: 20, top: 50, bottom: 30 },
+      xAxis: {
+        type: 'category', data: times,
+        axisLine: { lineStyle: { color: '#334155' } },
+        axisLabel: { color: '#94a3b8' },
+      },
+      yAxis: [
+        { type: 'value', name: '℃', scale: true,
+          axisLine: { lineStyle: { color: '#334155' } },
+          axisLabel: { color: '#94a3b8' },
+          splitLine: { lineStyle: { color: '#1e293b' } } },
+        { type: 'value', name: '%RH', scale: true, max: 100,
+          axisLine: { lineStyle: { color: '#334155' } },
+          axisLabel: { color: '#94a3b8' },
+          splitLine: { show: false } },
+      ],
+      series: [
+        { name: '温度 (℃)', type: 'line', data: temps, smooth: true, showSymbol: false,
+          lineStyle: { width: 2, color: '#f97316' }, itemStyle: { color: '#f97316' } },
+        { name: '湿度 (%RH)', type: 'line', yAxisIndex: 1, data: hums, smooth: true, showSymbol: false,
+          lineStyle: { width: 2, color: '#38bdf8' }, itemStyle: { color: '#38bdf8' },
+          areaStyle: { color: 'rgba(56, 189, 248, 0.08)' } },
+      ],
+    };
+    chart.setOption(option);
+    window.addEventListener('resize', () => chart.resize());
+
+    // ---------- 业务处理 ----------
+    function fmtTime(ts) {
+      const d = ts ? new Date(ts) : new Date();
+      const p = (n) => String(n).padStart(2, '0');
+      return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+
+    function pushData(data) {
+      const label = fmtTime(data.ts);
+      times.push(label);
+      temps.push(parseFloat(data.temperature));
+      hums.push(parseFloat(data.humidity));
+      if (times.length > MAX_POINTS) { times.shift(); temps.shift(); hums.shift(); }
+
+      document.getElementById('temp-value').textContent = parseFloat(data.temperature).toFixed(2);
+      document.getElementById('hum-value').textContent = parseFloat(data.humidity).toFixed(2);
+      const now = fmtTime();
+      document.getElementById('temp-time').textContent = now;
+      document.getElementById('hum-time').textContent = now;
+
+      chart.setOption({ xAxis: { data: times }, series: [{ data: temps }, { data: hums }] });
+    }
+
+    function setOnline(ok) {
+      const dot = document.getElementById('status-dot');
+      const text = document.getElementById('status-text');
+      dot.classList.toggle('online', ok);
+      text.textContent = ok ? '已连接' : '连接断开，重连中…';
+    }
+
+    // ---------- Socket.IO 事件 ----------
+    const socket = io();
+    socket.on('connect', () => setOnline(true));
+    socket.on('disconnect', () => setOnline(false));
+    socket.on('snapshot', pushData);   // 新连接时补发最新一条
+    socket.on('sensor', pushData);     // 实时推送
+  </script>
+</body>
+</html>

@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start": "node server.js",
     "sub": "node subscriber.js",
     "pub": "node publisher.js",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -13,6 +14,8 @@
   "license": "ISC",
   "dependencies": {
     "dotenv": "^17.4.2",
-    "mqtt": "^5.15.2"
+    "express": "^5.2.1",
+    "mqtt": "^5.15.2",
+    "socket.io": "^4.8.4"
   }
 }
